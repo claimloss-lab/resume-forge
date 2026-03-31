@@ -493,11 +493,7 @@ ${extraInstructions ? '- Additional instructions: ' + extraInstructions : ''}
 - Output the complete tailored resume only — no commentary, no preamble, no markdown formatting.`;
 
   try {
-    // ── CONFIG ─────────────────────────────────────────────────
-    // Replace with your Cloudflare Worker URL after deploying worker/
-    // e.g. https://resume-forge-api.YOUR_SUBDOMAIN.workers.dev
     const WORKER_URL = 'https://resume-forge-api.claimloss.workers.dev';
-    // ──────────────────────────────────────────────────────────
 
     const response = await fetch(WORKER_URL, {
       method: 'POST',
@@ -516,29 +512,9 @@ ${extraInstructions ? '- Additional instructions: ' + extraInstructions : ''}
     document.getElementById('loadingState').classList.remove('visible');
     out.style.display = 'block';
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6);
-        if (data === '[DONE]') continue;
-        try {
-          const p = JSON.parse(data);
-          if (p.type === 'content_block_delta' && p.delta?.text) {
-            generatedText += p.delta.text;
-            out.textContent = generatedText;
-          }
-        } catch {}
-      }
-    }
+    const data = await response.json();
+    generatedText = data.text || 'Error: No response from AI';
+    out.textContent = generatedText;
 
     setStatus('done', 'Resume tailored successfully');
     document.getElementById('outputActions').style.display = 'flex';
