@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ResumeForge — AI Resume Tailor</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -163,14 +165,14 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
         <div class="sect-title">Step 1 — Paste your current resume</div>
 
         <div class="drop-zone" id="dropZone">
-          <input type="file" id="fileInput" accept=".txt" onchange="handleFile(event)">
+          <input type="file" id="fileInput" accept=".txt,.pdf,.doc,.docx" onchange="handleFile(event)">
           <div class="drop-zone-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" color="#6b7280">
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
           </div>
-          <h4 id="dropTitle">Upload a .txt file</h4>
-          <p id="dropSub">Drag & drop or click to browse</p>
+          <h4 id="dropTitle">Upload your resume</h4>
+          <p id="dropSub">PDF, Word (.docx), or .txt · drag & drop or click</p>
         </div>
 
         <div class="or-divider">or paste directly below</div>
@@ -385,20 +387,61 @@ function goStep2() {
   updateStepUI(2);
 }
 
-function handleFile(e) {
+async function handleFile(e) {
   const file = e.target.files[0];
   if (!file) return;
-  if (!file.name.endsWith('.txt')) { showToast('Only .txt files supported — please paste manually'); return; }
-  const reader = new FileReader();
-  reader.onload = ev => {
-    document.getElementById('resumeText').value = ev.target.result;
+
+  const dz = document.getElementById('dropZone');
+  document.getElementById('dropTitle').textContent = 'Reading ' + file.name + '...';
+  document.getElementById('dropSub').textContent = 'Please wait...';
+
+  try {
+    let text = '';
+
+    if (file.name.endsWith('.txt')) {
+      text = await file.text();
+
+    } else if (file.name.endsWith('.pdf')) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pages = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map(item => item.str).join(' ');
+        pages.push(pageText);
+      }
+      text = pages.join('\n\n');
+
+    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      text = result.value;
+
+    } else {
+      showToast('รองรับเฉพาะ PDF, Word (.docx), และ .txt ครับ');
+      document.getElementById('dropTitle').textContent = 'Upload your resume';
+      document.getElementById('dropSub').textContent = 'PDF, Word (.docx), or .txt · drag & drop or click';
+      return;
+    }
+
+    if (!text.trim()) {
+      showToast('ไม่พบข้อความในไฟล์ — ลอง paste ตรงๆ แทนได้ครับ');
+      return;
+    }
+
+    document.getElementById('resumeText').value = text.trim();
     updateCharCount();
-    const dz = document.getElementById('dropZone');
     dz.classList.add('file-loaded');
-    document.getElementById('dropTitle').textContent = file.name + ' loaded';
-    document.getElementById('dropSub').textContent = ev.target.result.length.toLocaleString() + ' characters';
-  };
-  reader.readAsText(file);
+    document.getElementById('dropTitle').textContent = file.name + ' loaded ✓';
+    document.getElementById('dropSub').textContent = text.length.toLocaleString() + ' characters extracted';
+
+  } catch (err) {
+    showToast('อ่านไฟล์ไม่ได้: ' + err.message);
+    document.getElementById('dropTitle').textContent = 'Upload your resume';
+    document.getElementById('dropSub').textContent = 'PDF, Word (.docx), or .txt · drag & drop or click';
+  }
 }
 
 const dz = document.getElementById('dropZone');
