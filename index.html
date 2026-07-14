@@ -232,7 +232,16 @@ Python, Node.js, PostgreSQL, Docker, AWS"></textarea>
         </div>
 
         <div class="field-group">
-          <label>Job Description <span class="hint">— paste JD for best keyword matching</span></label>
+          <label>Job Posting URL <span class="hint">— วาง link ประกาศงาน แล้วกดดึง JD อัตโนมัติ</span></label>
+          <div style="display:flex;gap:8px">
+            <input type="url" id="jdUrl" placeholder="https://... (ลิงก์ประกาศรับสมัครงาน)" style="flex:1">
+            <button type="button" class="btn btn-secondary" style="white-space:nowrap;padding:8px 14px" onclick="fetchJD()" id="fetchJdBtn">ดึง JD</button>
+          </div>
+          <div class="char-count" id="jdUrlStatus" style="text-align:left"></div>
+        </div>
+
+        <div class="field-group">
+          <label>Job Description <span class="hint">— หรือ paste JD เองตรงนี้ (ไม่บังคับ)</span></label>
           <textarea id="jobDesc" rows="7" placeholder="Paste the job posting here for best results...
 
 Or describe what the role involves:
@@ -459,6 +468,45 @@ function updateCharCount() {
   document.getElementById('resumeCount').textContent = len.toLocaleString() + ' characters';
 }
 document.getElementById('resumeText').addEventListener('input', updateCharCount);
+
+async function fetchJD() {
+  const url = document.getElementById('jdUrl').value.trim();
+  const status = document.getElementById('jdUrlStatus');
+  const btn = document.getElementById('fetchJdBtn');
+
+  if (!url) { showToast('กรุณาวาง URL ก่อนครับ'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'กำลังดึง...';
+  status.textContent = 'กำลังดึงข้อมูลจากเว็บ...';
+  status.style.color = 'var(--ink-light)';
+
+  try {
+    const WORKER_URL = 'https://resume-forge-api.claimloss.workers.dev';
+    const response = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'fetch_jd', url: url })
+    });
+    const data = await response.json();
+
+    if (data.jd) {
+      document.getElementById('jobDesc').value = data.jd;
+      status.textContent = '✓ ดึง JD สำเร็จ (' + data.jd.length.toLocaleString() + ' ตัวอักษร) — ตรวจสอบและแก้ไขได้ในช่องด้านล่าง';
+      status.style.color = 'var(--success)';
+      showToast('ดึง JD สำเร็จ!');
+    } else {
+      status.textContent = '✗ ' + (data.error || 'ดึงไม่สำเร็จ — กรุณา copy JD มาวางเองครับ');
+      status.style.color = 'var(--warn)';
+    }
+  } catch (err) {
+    status.textContent = '✗ เกิดข้อผิดพลาด: ' + err.message;
+    status.style.color = 'var(--warn)';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'ดึง JD';
+}
 
 async function generateResume() {
   const resumeText = document.getElementById('resumeText').value.trim();
