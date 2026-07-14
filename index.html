@@ -321,7 +321,11 @@ e.g. Lead a data team, build Power BI dashboards, write SQL for ETL pipelines, r
           </button>
           <button class="btn-icon-sm" onclick="downloadResume()">
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2v8M5 7l3 3 3-3M2 12v1a1 1 0 001 1h10a1 1 0 001-1v-1"/></svg>
-            Download
+            .txt
+          </button>
+          <button class="btn-icon-sm" onclick="downloadPDF()" style="color:var(--accent);border-color:rgba(37,99,235,.35)">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z"/><path d="M9 2v4h4"/></svg>
+            PDF
           </button>
           <button class="btn-icon-sm" onclick="retailor()">
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13.5 2.5a6 6 0 11-9.9 5"/><path d="M2 2l1.5 3h3"/></svg>
@@ -643,6 +647,95 @@ function downloadResume() {
   a.href = URL.createObjectURL(blob);
   a.download = 'Resume_' + name + '.txt';
   a.click();
+}
+
+function downloadPDF() {
+  if (!generatedText) { showToast('ยังไม่มี resume ให้ export ครับ'); return; }
+
+  // แปลง plain text เป็น HTML สวยๆ
+  const lines = generatedText.split('\n');
+  let html = '';
+  let inList = false;
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      if (inList) { html += '</ul>'; inList = false; }
+      continue;
+    }
+
+    const isBullet = /^[-•▪●*]\s+/.test(line);
+    // หัวข้อ: ตัวพิมพ์ใหญ่ล้วน ยาวเกิน 2 ตัวอักษร ไม่ใช่ bullet
+    const isHeader = !isBullet && line === line.toUpperCase() && /[A-Z]{3,}/.test(line) && line.length < 60;
+
+    if (isHeader) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<h2>' + escapeHtml(line) + '</h2>';
+    } else if (isBullet) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += '<li>' + escapeHtml(line.replace(/^[-•▪●*]\s+/, '')) + '</li>';
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<p>' + escapeHtml(line) + '</p>';
+    }
+  }
+  if (inList) html += '</ul>';
+
+  const name = (document.getElementById('targetTitle').value || 'Resume').replace(/\s+/g, '_');
+
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Resume_${name}</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', 'Sarabun', Tahoma, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: 180mm;
+    margin: 0 auto;
+    padding: 20px;
+  }
+  h2 {
+    font-size: 11pt;
+    letter-spacing: 0.08em;
+    color: #1a1a1a;
+    border-bottom: 1.5px solid #1a1a1a;
+    padding-bottom: 3px;
+    margin: 14px 0 8px;
+  }
+  body > p:first-of-type {
+    font-size: 16pt;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  p { margin-bottom: 4px; }
+  ul { padding-left: 18px; margin-bottom: 6px; }
+  li { margin-bottom: 3px; }
+  @media print {
+    body { padding: 0; }
+  }
+</style>
+</head>
+<body>
+${html}
+<script>
+  window.onload = function() { setTimeout(function(){ window.print(); }, 300); };
+<\/script>
+</body>
+</html>`);
+  win.document.close();
+
+  showToast('เลือก "Save as PDF" ในหน้าต่าง print ครับ');
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function retailor() {
