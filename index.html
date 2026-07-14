@@ -212,6 +212,9 @@ Python, Node.js, PostgreSQL, Docker, AWS"></textarea>
           Continue to Target Role
           <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 10h10M11 6l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <div style="text-align:center;margin-top:.75rem">
+          <a href="javascript:clearSaved()" style="font-size:12px;color:var(--ink-light);text-decoration:underline">ล้างข้อมูลที่บันทึกไว้</a>
+        </div>
       </div>
     </div>
 
@@ -304,7 +307,7 @@ e.g. Lead a data team, build Power BI dashboards, write SQL for ETL pipelines, r
       </div>
     </div>
 
-  </div> 
+  </div>
 
   <!-- OUTPUT -->
   <div class="output-panel">
@@ -373,8 +376,10 @@ e.g. Lead a data team, build Power BI dashboards, write SQL for ETL pipelines, r
 <div class="toast" id="toast"></div>
 
 <script>
+const WORKER_URL = 'https://resume-forge-api.claimloss.workers.dev';
 let generatedText = '';
 let currentStep = 1;
+let isGenerating = false;
 
 function updateStepUI(step) {
   currentStep = step;
@@ -410,11 +415,12 @@ async function handleFile(e) {
 
   try {
     let text = '';
+    const fname = file.name.toLowerCase();
 
-    if (file.name.endsWith('.txt')) {
+    if (fname.endsWith('.txt')) {
       text = await file.text();
 
-    } else if (file.name.endsWith('.pdf')) {
+    } else if (fname.endsWith('.pdf')) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -427,10 +433,16 @@ async function handleFile(e) {
       }
       text = pages.join('\n\n');
 
-    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+    } else if (fname.endsWith('.docx')) {
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.extractRawText({ arrayBuffer });
       text = result.value;
+
+    } else if (fname.endsWith('.doc')) {
+      showToast('.doc รุ่นเก่ายังไม่รองรับครับ — บันทึกเป็น .docx ใน Word ก่อน หรือ paste ข้อความตรงๆ');
+      document.getElementById('dropTitle').textContent = 'Upload your resume';
+      document.getElementById('dropSub').textContent = 'PDF, Word (.docx), or .txt · drag & drop or click';
+      return;
 
     } else {
       showToast('รองรับเฉพาะ PDF, Word (.docx), และ .txt ครับ');
@@ -479,6 +491,7 @@ async function fetchJD() {
   const btn = document.getElementById('fetchJdBtn');
 
   if (!url) { showToast('กรุณาวาง URL ก่อนครับ'); return; }
+  if (!/^https?:\/\//i.test(url)) { showToast('URL ต้องขึ้นต้นด้วย http:// หรือ https:// ครับ'); return; }
 
   btn.disabled = true;
   btn.textContent = 'กำลังดึง...';
@@ -486,7 +499,6 @@ async function fetchJD() {
   status.style.color = 'var(--ink-light)';
 
   try {
-    const WORKER_URL = 'https://resume-forge-api.claimloss.workers.dev';
     const response = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -523,8 +535,18 @@ async function generateResume() {
   const length = document.getElementById('lengthSelect').value;
   const extraInstructions = document.getElementById('extraInstructions').value.trim();
 
+  if (isGenerating) { showToast('กำลัง generate อยู่ครับ รอสักครู่...'); return; }
   if (!resumeText) { showToast('Please paste your resume first'); goStep1(); return; }
   if (!targetTitle) { showToast('Please enter a target job title'); return; }
+  if (resumeText.length > 20000) {
+    showToast('Resume ยาวเกิน 20,000 ตัวอักษร — กรุณาตัดส่วนที่ไม่จำเป็นออกครับ');
+    goStep1();
+    return;
+  }
+
+  isGenerating = true;
+  const genBtn = document.getElementById('generateBtn');
+  if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'กำลังสร้าง Resume...'; }
 
   updateStepUI(3);
   setStatus('active', 'Tailoring with Claude...');
@@ -588,7 +610,6 @@ ${extraInstructions ? '- Additional instructions: ' + extraInstructions : ''}
 - Output the complete tailored resume only — no commentary, no preamble, no markdown formatting.`;
 
   try {
-    const WORKER_URL = 'https://resume-forge-api.claimloss.workers.dev';
 
     const response = await fetch(WORKER_URL, {
       method: 'POST',
@@ -598,29 +619,88 @@ ${extraInstructions ? '- Additional instructions: ' + extraInstructions : ''}
       })
     });
 
-    clearInterval(stepTimer);
-    lsIds.forEach(id => {
-      document.getElementById(id).classList.remove('active');
-      document.getElementById(id).classList.add('done');
-    });
+    const contentType = response.headers.get('content-type') || '';
 
-    document.getElementById('loadingState').classList.remove('visible');
-    out.style.display = 'block';
+    // ── กรณี Worker ตอบ JSON = error (rate limit, credit หมด ฯลฯ) ──
+    if (contentType.includes('application/json')) {
+      clearInterval(stepTimer);
+      document.getElementById('loadingState').classList.remove('visible');
+      out.style.display = 'block';
+      const data = await response.json();
+      generatedText = '';
+      out.textContent = '⚠ ' + (data.error || 'เกิดข้อผิดพลาดไม่ทราบสาเหตุ');
+      setStatus('', 'Error occurred');
 
-    const data = await response.json();
-    generatedText = data.text || 'Error: No response from AI';
-    out.textContent = generatedText;
+    } else {
+      // ── STREAMING: อ่าน SSE แล้วแสดง text แบบ realtime ──
+      let firstChunk = true;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      generatedText = '';
 
-    setStatus('done', 'Resume tailored successfully');
-    document.getElementById('outputActions').style.display = 'flex';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
+              if (firstChunk) {
+                // text แรกมาถึง — ปิด loading เปิด output
+                clearInterval(stepTimer);
+                lsIds.forEach(id => {
+                  document.getElementById(id).classList.remove('active');
+                  document.getElementById(id).classList.add('done');
+                });
+                document.getElementById('loadingState').classList.remove('visible');
+                out.style.display = 'block';
+                setStatus('active', 'กำลังเขียน Resume...');
+                firstChunk = false;
+              }
+              generatedText += evt.delta.text;
+              out.textContent = generatedText;
+            }
+            if (evt.type === 'error') {
+              throw new Error(evt.error?.message || 'stream error');
+            }
+          } catch (e) {
+            if (e.message !== 'Unexpected end of JSON input') throw e;
+          }
+        }
+      }
+
+      clearInterval(stepTimer);
+      document.getElementById('loadingState').classList.remove('visible');
+      out.style.display = 'block';
+
+      if (generatedText) {
+        setStatus('done', 'Resume tailored successfully');
+        document.getElementById('outputActions').style.display = 'flex';
+      } else {
+        out.textContent = '⚠ ไม่ได้รับข้อความตอบกลับ — ลองใหม่อีกครั้งครับ';
+        setStatus('', 'Error occurred');
+      }
+    }
 
   } catch (err) {
     clearInterval(stepTimer);
     document.getElementById('loadingState').classList.remove('visible');
     out.style.display = 'block';
-    out.textContent = 'Error: ' + err.message;
+    out.textContent = '⚠ เชื่อมต่อไม่สำเร็จ: ' + err.message + '\n\nลองใหม่อีกครั้ง หรือเช็คว่า Worker ยังทำงานอยู่ครับ';
     setStatus('', 'Error occurred');
   }
+
+  isGenerating = false;
+  const genBtnEnd = document.getElementById('generateBtn');
+  if (genBtnEnd) { genBtnEnd.disabled = false; genBtnEnd.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/></svg> Tailor My Resume with Claude'; }
 }
 
 function setStatus(type, text) {
@@ -665,8 +745,12 @@ function downloadPDF() {
     }
 
     const isBullet = /^[-•▪●*]\s+/.test(line);
-    // หัวข้อ: ตัวพิมพ์ใหญ่ล้วน ยาวเกิน 2 ตัวอักษร ไม่ใช่ bullet
-    const isHeader = !isBullet && line === line.toUpperCase() && /[A-Z]{3,}/.test(line) && line.length < 60;
+    // หัวข้อ: ALL CAPS อังกฤษ หรือ ขึ้นต้นด้วยคำหัวข้อภาษาไทย
+    const thaiHeaderRe = /^(ประวัติ|ข้อมูลส่วนตัว|ข้อมูลติดต่อ|ช่องทางติดต่อ|สรุป|เกี่ยวกับ|ประสบการณ์|ประวัติการทำงาน|การศึกษา|ประวัติการศึกษา|ทักษะ|ความสามารถ|ความเชี่ยวชาญ|ผลงาน|โครงการ|ใบรับรอง|ประกาศนียบัตร|กิจกรรม|ภาษา|รางวัล|บุคคลอ้างอิง)/;
+    const isHeader = !isBullet && line.length < 60 && (
+      (line === line.toUpperCase() && /[A-Z]{3,}/.test(line)) ||
+      thaiHeaderRe.test(line)
+    );
 
     if (isHeader) {
       if (inList) { html += '</ul>'; inList = false; }
@@ -684,6 +768,10 @@ function downloadPDF() {
   const name = (document.getElementById('targetTitle').value || 'Resume').replace(/\s+/g, '_');
 
   const win = window.open('', '_blank');
+  if (!win) {
+    showToast('Browser block popup ครับ — กรุณาอนุญาต popup สำหรับเว็บนี้แล้วลองใหม่');
+    return;
+  }
   win.document.write(`<!DOCTYPE html>
 <html>
 <head>
@@ -747,6 +835,88 @@ function retailor() {
   out.style.display = 'none';
   document.getElementById('emptyState').style.display = 'flex';
 }
+
+// ═══ AUTO-SAVE: เก็บข้อมูลใน localStorage กัน refresh แล้วหาย ═══
+const SAVE_KEY = 'resumeforge_v1';
+const SAVED_FIELDS = ['resumeText','targetTitle','targetCompany','jobDesc','keySkills','extraInstructions','jdUrl','toneSelect','lengthSelect'];
+
+function saveState() {
+  try {
+    const state = {};
+    SAVED_FIELDS.forEach(f => {
+      const el = document.getElementById(f);
+      if (el) state[f] = el.value;
+    });
+    state._tags = [...document.querySelectorAll('#quickTags .tag.selected')].map(t => t.textContent);
+    state._resume = generatedText;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  } catch {}
+}
+
+function restoreState() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return;
+    const state = JSON.parse(raw);
+
+    SAVED_FIELDS.forEach(f => {
+      const el = document.getElementById(f);
+      if (el && state[f]) el.value = state[f];
+    });
+
+    if (Array.isArray(state._tags)) {
+      document.querySelectorAll('#quickTags .tag').forEach(t => {
+        if (state._tags.includes(t.textContent)) t.classList.add('selected');
+      });
+    }
+
+    if (state._resume) {
+      generatedText = state._resume;
+      const out = document.getElementById('resume-output');
+      out.textContent = generatedText;
+      out.style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('outputActions').style.display = 'flex';
+      setStatus('done', 'Resume จากครั้งก่อน (กด Re-tailor เพื่อสร้างใหม่)');
+    }
+
+    if (state.resumeText) {
+      updateCharCount();
+      showToast('กู้คืนข้อมูลจากครั้งก่อนให้แล้วครับ');
+    }
+  } catch {}
+}
+
+function clearSaved() {
+  if (!confirm('ล้างข้อมูลที่บันทึกไว้ทั้งหมด?')) return;
+  localStorage.removeItem(SAVE_KEY);
+  location.reload();
+}
+
+// auto-save ทุกครั้งที่พิมพ์ (debounced 800ms)
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveState, 800);
+}
+SAVED_FIELDS.forEach(f => {
+  const el = document.getElementById(f);
+  if (el) {
+    el.addEventListener('input', scheduleSave);
+    el.addEventListener('change', scheduleSave);
+  }
+});
+document.getElementById('quickTags').addEventListener('click', scheduleSave);
+
+// save หลัง generate เสร็จด้วย
+const _origSetStatus = setStatus;
+setStatus = function(type, text) {
+  _origSetStatus(type, text);
+  if (type === 'done') saveState();
+};
+
+// restore ตอนเปิดหน้า
+restoreState();
 </script>
 </body>
 </html>
